@@ -17,7 +17,9 @@ import tempfile
 import librosa
 from urllib.request import urlopen
 from llm_engine import LLMEngine
+import os
 
+os.environ["VLLM_USE_V1"] = '0'
 class QwenOmniLLMEngine(LLMEngine):
     def __init__(self, model_name: str):
         self._max_model_len = 5632
@@ -74,6 +76,7 @@ class QwenOmniLLMEngine(LLMEngine):
         outputs = self._engine.generate(text_prompt,
                         sampling_params=sampling_params, request_id=request_id)
         
+        fist_time = True
         prev_text = ""
         async for o in outputs:
             generated_text = o.outputs[0].text
@@ -84,6 +87,9 @@ class QwenOmniLLMEngine(LLMEngine):
            
             prev_text = generated_text
             if delta:
+                if fist_time:
+                    logger.info(f"First time: {delta}")
+                    fist_time = False
                 yield (delta, finnished)
 
 
