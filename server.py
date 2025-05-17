@@ -20,14 +20,15 @@ logger.add(sys.stderr, level="DEBUG")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # initialize resources
-    # llm_engine = QwenOmniLLMEngine()
-    llm_engine = QwenOmniLLMEngine(model_name="Qwen/Qwen2.5-Omni-3B")
-    llm_engine.start()
-    app.state.llm_engine = llm_engine
-
+    
+    # load whisper before vllm to avoid the later occupy all gpu memory
     stt_engine = WhisperSTTEngine(model=Model.LARGE)
     stt_engine.load()
     app.state.stt_engine = stt_engine
+
+    llm_engine = QwenOmniLLMEngine(model_name="Qwen/Qwen2.5-Omni-3B")
+    llm_engine.start()
+    app.state.llm_engine = llm_engine
     
     yield
     # Clean up resources
