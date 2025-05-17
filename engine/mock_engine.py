@@ -2,8 +2,9 @@ from llm_engine import LLMEngine
 from typing import List, AsyncGenerator, Tuple, Dict, Union
 import time
 
+import pprint
 class MockLLMEngine(LLMEngine):
-    def __init__(self):
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-Omni-3B"):
         super().__init__()
 
     def start(self):
@@ -19,8 +20,13 @@ class MockLLMEngine(LLMEngine):
         request_id=str(time.time()),
     ) -> AsyncGenerator[Tuple[str, bool], None]:
         # Add any additional initialization logic here
+        
+        pprint.pprint(messages)
+        
+        yield (f"{request_id}: ", False)
+        yield (f"en...", False)
         for i in range(50):
-            yield (f"{i+1}-{i+1}-{i+1}-{i+1}", False)
+            yield ("....", False)
             time.sleep(0.1)
             
         yield ("", True)

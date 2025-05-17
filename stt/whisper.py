@@ -188,8 +188,8 @@ class MLXModel(Enum):
     # Multilingual models
     TINY = "mlx-community/whisper-tiny"
     MEDIUM = "mlx-community/whisper-medium-mlx"
-    LARGE_V3 = "mlx-community/whisper-large-v3-mlx"
-    LARGE_V3_TURBO = "mlx-community/whisper-large-v3-turbo"
+    LARGE = "mlx-community/whisper-large-v3-mlx"
+    LARGE_TURBO = "mlx-community/whisper-large-v3-turbo"
     DISTIL_LARGE_V3 = "mlx-community/distil-whisper-large-v3"
     LARGE_V3_TURBO_Q4 = "mlx-community/whisper-large-v3-turbo-q4"
 
@@ -256,7 +256,6 @@ class WhisperSTTEngineMLX(STTEngine):
 
         Yields:
             str: Either a TranscriptionFrame containing the transcribed text
-                  or an ErrorFrame if transcription fails.
 
         Note:
             The audio is expected to be 16-bit signed PCM data.
@@ -297,3 +296,150 @@ class WhisperSTTEngineMLX(STTEngine):
         except Exception as e:
             logger.exception(f"MLX Whisper transcription error: {e}")
             yield f"MLX Whisper transcription error: {str(e)}"
+
+
+class Model(Enum):
+    """Class of basic Whisper model selection options.
+
+    Available models:
+        Multilingual models:
+            TINY: Smallest multilingual model
+            BASE: Basic multilingual model
+            MEDIUM: Good balance for multilingual
+            LARGE: Best quality multilingual
+            DISTIL_LARGE_V2: Fast multilingual
+
+        English-only models:
+            DISTIL_MEDIUM_EN: Fast English-only
+    """
+
+    # Multilingual models
+    TINY = "tiny"
+    BASE = "base"
+    MEDIUM = "medium"
+    LARGE = "large-v3"
+    DISTIL_LARGE_V2 = "Systran/faster-distil-whisper-large-v2"
+
+    # English-only models
+    DISTIL_MEDIUM_EN = "Systran/faster-distil-whisper-medium.en"
+
+class WhisperSTTEngine(STTEngine):
+    """
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str | Model = Model.DISTIL_MEDIUM_EN,
+        device: str = "auto",
+        compute_type: str = "default",
+        no_speech_prob: float = 0.4,
+        language: Language = Language.EN,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._device: str = device
+        self._compute_type = compute_type
+        self._model_name = model if isinstance(model, str) else model.value
+        self._no_speech_prob = no_speech_prob
+        self._model = None
+
+        self._settings = {
+            "language": language,
+        }
+
+
+    def can_generate_metrics(self) -> bool:
+        """Indicates whether this service can generate metrics.
+
+        Returns:
+            bool: True, as this service supports metric generation.
+        """
+        return True
+
+    def language_to_service_language(self, language: Language) -> Optional[str]:
+        """Convert from pipecat Language to Whisper language code.
+
+        Args:
+            language: The Language enum value to convert.
+
+        Returns:
+            str or None: The corresponding Whisper language code, or None if not supported.
+        """
+        return language_to_whisper_language(language)
+
+    async def set_language(self, language: Language):
+        """Set the language for transcription.
+
+        Args:
+            language: The Language enum value to use for transcription.
+        """
+        logger.info(f"Switching STT language to: [{language}]")
+        self._settings["language"] = language
+
+    def load(self):
+        """Loads the Whisper model.
+
+        Note:
+            If this is the first time this model is being run,
+            it will take time to download from the Hugging Face model hub.
+        """
+        try:
+            from faster_whisper import WhisperModel
+
+            logger.debug("Loading Whisper model...")
+            self._model = WhisperModel(
+                self._model_name, device=self._device, compute_type=self._compute_type
+            )
+            logger.debug("Loaded Whisper model")
+        except ModuleNotFoundError as e:
+            logger.error(f"Exception: {e}")
+            self._model = None
+            
+    def unload(self):
+        self._model = None
+
+    async def run_stt(self, audio: bytes) -> AsyncGenerator[str, None]:
+        """Transcribes given audio using Whisper.
+
+        Args:
+            audio: Raw audio bytes in 16-bit PCM format.
+
+        Yields:
+            str: Either a TranscriptionFrame containing the transcribed text
+
+        Note:
+            The audio is expected to be 16-bit signed PCM data.
+            The service will normalize it to float32 in the range [-1, 1].
+        """
+        if not self._model:
+            logger.error(f"{self} error: Whisper model not available")
+            return
+
+        # Divide by 32768 because we have signed 16-bit data.
+        audio_float = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+
+        # whisper_lang = self.language_to_service_language(self._settings["language"])
+        segments, _ = await asyncio.to_thread(
+            self._model.transcribe, audio_float, language=None
+        )
+        text: str = ""
+        for segment in segments:
+            if segment.no_speech_prob < self._no_speech_prob:
+                text += f"{segment.text} "
+
+
+        if text:
+            logger.debug(f"Transcription: [{text}]")
+            yield text, self._settings["language"]
+
+    def language_to_service_language(self, language: Language) -> Optional[str]:
+        """Convert from pipecat Language to Whisper language code.
+
+        Args:
+            language: The Language enum value to convert.
+
+        Returns:
+            str or None: The corresponding Whisper language code, or None if not supported.
+        """
+        return language_to_whisper_language(language)

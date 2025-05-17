@@ -53,6 +53,7 @@ from audio.vad.silero import SileroVADAnalyzer
 import numpy as np
 from utils import generateId
 from stt_engine import STTEngine
+from pprint import pprint
 
 DEFAULT_SESSION_PROPERTIES = SessionProperties(
     modalities=["text"],
@@ -331,6 +332,10 @@ class RealtimeLLMSession:
                                 item_id=self._input_audio_buffer.item_id,
                             )
                         )
+                        
+                        self._cancel_response = True
+                        self._cancel_repsonse_id = None
+                        
                     elif new_vad_state == VADState.QUIET:
                         logger.debug(f"Speech stopped, time_offset: {time_offset}")
                         commit_buffer = True
@@ -340,12 +345,15 @@ class RealtimeLLMSession:
                                 item_id=self._input_audio_buffer.item_id,
                             )
                         )
+                        
+                        self._cancel_response = False
+                        self._cancel_repsonse_id = None
 
                     self._current_vad_state = new_vad_state
                     
         if commit_buffer:
             buffer = self._input_audio_buffer.buffer #save for stt
-            await self._handle_input_audio_buffer_commit(
+            conv_item = await self._handle_input_audio_buffer_commit(
                 InputAudioBufferCommitEvent(
                     type="input_audio_buffer.commit",
                     item_id=self._input_audio_buffer.item_id,
@@ -356,17 +364,21 @@ class RealtimeLLMSession:
             
             if self._stt_engine:
                 # Transcribe the audio buffer
+                transcript = ""
                 async for text, language in self._stt_engine.run_stt(buffer):
                     if text:
                         print(f"Transcription: [{text}]")
+                        transcript += text
                         await self.send_event(ConversationItemInputAudioTranscriptionCompleted(
                             transcript=text,
                             item_id=self._input_audio_buffer.item_id,
                             content_index=0
                         ))
                         await asyncio.sleep(0)
-
-    async def _handle_input_audio_buffer_commit(self, event: InputAudioBufferCommitEvent):
+                if transcript and conv_item.content[0].type == "input_audio":
+                    conv_item.content[0].transcript = transcript
+                    
+    async def _handle_input_audio_buffer_commit(self, event: InputAudioBufferCommitEvent)-> ConversationItem:
         logger.debug(f"Input audio buffer commit event: {event}")
         
         # Process the audio buffer by creating conversation item
@@ -387,6 +399,7 @@ class RealtimeLLMSession:
             )
         )
         self._input_audio_buffer = InputAudioBuffer()  # Clear the buffer after commit
+        return item
 
     async def _handle_input_audio_buffer_clear(self, event: InputAudioBufferClearEvent):
         logger.debug(f"Input audio buffer clear event: {event}")
@@ -501,22 +514,27 @@ class RealtimeLLMSession:
                     ]
                 )    
             ]
+            out_of_band = False
             if in_response and in_response.input:
                 for item in in_response.input:
                     conversation_items.append(item)
-            elif in_response and in_response.conversation == "auto": 
+            elif in_response and in_response.conversation == "none": 
+                # Create an out-of-band response
+                out_of_band = True
+            else:
                 # Use the default conversation
                 conversation_items.extend(self._messages)
-                
+            
             generated_text = ""
             messages = self.convert_to_listofdict(conversation_items)
             async for (delta, finished) in self._llm_engine.generate_response(
                 messages,
                 temperature=out_response.temperature,
                 max_tokens=out_response.max_output_tokens,
+                request_id=item_id,
             ):
                 if self._cancel_response:
-                    if self._cancel_repsonse_id != response_id:
+                    if self._cancel_repsonse_id and self._cancel_repsonse_id != response_id:
                         logger.info(f"Failed to cancel response: {self._cancel_repsonse_id}")
                         self._cancel_response = False
                         self._cancel_repsonse_id = None
@@ -565,7 +583,8 @@ class RealtimeLLMSession:
                     )
                 ]
             )
-            self._messages.append(item)
+            if not out_of_band:
+                self._messages.append(item)
             
             out_response.output = [item]
             out_response.status = "completed"
@@ -638,11 +657,15 @@ class RealtimeLLMSession:
                     content["type"] = "text" 
                     content["text"] = part.text
                 elif part.type == "input_audio":  #no audio which is for output, fillter it out
-                    content["type"] = "audio" 
-                    audio = base64.b64decode(part.audio)
-                    #convert to np.array
-                    audio_data = np.frombuffer(audio, dtype=np.int16)
-                    content["audio"] = audio_data
+                    if part.transcript:
+                        content["type"] = "text" 
+                        content["text"] = part.transcript
+                    else:
+                        content["type"] = "audio" 
+                        audio = base64.b64decode(part.audio)
+                        #convert to np.array
+                        audio_data = np.frombuffer(audio, dtype=np.int16)
+                        content["audio"] = audio_data
             
                 contents.append(content)
 

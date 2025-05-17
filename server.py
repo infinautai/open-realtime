@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 from loguru import logger
 # from engine.qwen_omni import QwenOmniLLMEngine
 from engine.mock_engine import MockLLMEngine as QwenOmniLLMEngine
-from stt.whisper import WhisperSTTEngineMLX as WhisperSTTEngine, MLXModel
+from stt.whisper import WhisperSTTEngineMLX as WhisperSTTEngine, MLXModel as Model
+# from stt.whisper import WhisperSTTEngine, Model
 from session import RealtimeLLMSession
 
 logger.remove()  # Remove existing handlers
@@ -19,11 +20,12 @@ logger.add(sys.stderr, level="DEBUG")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # initialize resources
-    llm_engine = QwenOmniLLMEngine()
+    # llm_engine = QwenOmniLLMEngine()
+    llm_engine = QwenOmniLLMEngine(model_name="Qwen/Qwen2.5-Omni-3B")
     llm_engine.start()
     app.state.llm_engine = llm_engine
 
-    stt_engine = WhisperSTTEngine(model=MLXModel.LARGE_V3)
+    stt_engine = WhisperSTTEngine(model=Model.LARGE)
     stt_engine.load()
     app.state.stt_engine = stt_engine
     
