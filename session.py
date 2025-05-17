@@ -476,135 +476,120 @@ class RealtimeLLMSession:
         await self._generating_queue.put(event)
     
     async def _do_generate(self, event: ResponseCreateEvent):
+        item_id = generateId("item")
+        response_id = generateId("resp")
+        in_response = event.response
+        conv_id = generateId("conv") if not in_response or in_response.conversation != "auto" else self._default_conversation_id
+
+        out_response = OutboundResponseProperties(
+            id=response_id,
+            conversation_id=conv_id,
+            object="realtime.response",
+            metadata=getattr(in_response, "metadata", None),
+            modalities=["text"],
+            temperature=(in_response.temperature
+                        if in_response and in_response.temperature is not None
+                        else self._settings.temperature),
+            max_output_tokens=(in_response.max_response_output_tokens
+                            if in_response and in_response.max_response_output_tokens is not None
+                            else self._settings.max_response_output_tokens),
+        )
+
         try:
-            item_id = generateId("item")
-            response_id = generateId("resp")
+            # --- Prebuild conversation ---
+            conversation_items = []
+            system_text = ((in_response.instructions or self._settings.instructions)
+                        if in_response else self._settings.instructions)
+            conversation_items.append(ConversationItem(
+                object="realtime.item",
+                type="message",
+                role="system",
+                content=[ItemContent(type="text", text=system_text)]
+            ))
 
-            in_response = event.response
-            conv_id = self._default_conversation_id 
-            if not in_response or in_response.conversation != "auto":
-                # Create a new conversation ID
-                conv_id = generateId("conv")
-
-            out_response = OutboundResponseProperties(
-                id=response_id,
-                conversation_id=conv_id,
-                object="realtime.response",
-                metadata=in_response.metadata if in_response else None,
-                modalities=['text'],
-                temperature=self._settings.temperature,
-                max_output_tokens=self._settings.max_response_output_tokens,
-            )
-            if in_response and in_response.temperature is not None:
-                out_response.temperature = in_response.temperature
-            if in_response and in_response.max_response_output_tokens is not None:
-                out_response.max_output_tokens = in_response.max_response_output_tokens
-            
-            #Construct the input messages
-            conversation_items = [
-                ConversationItem(
-                    object="realtime.item",
-                    type="message",
-                    role="system",
-                    content=[
-                        ItemContent(
-                            type="text",
-                            text=in_response.instructions or self._settings.instructions if in_response else self._settings.instructions,
-                        )
-                    ]
-                )    
-            ]
             out_of_band = False
-            if in_response and in_response.input:
-                for item in in_response.input:
-                    conversation_items.append(item)
-            elif in_response and in_response.conversation == "none": 
-                # Create an out-of-band response
-                out_of_band = True
+            if in_response:
+                if in_response.input:
+                    conversation_items += in_response.input
+                elif in_response.conversation == "none":
+                    out_of_band = True
+                else:
+                    conversation_items += self._messages
             else:
-                # Use the default conversation
-                conversation_items.extend(self._messages)
-            
-            generated_text = ""
+                conversation_items += self._messages
+
             messages = self.convert_to_listofdict(conversation_items)
-            async for (delta, finished) in self._llm_engine.generate_response(
+
+            # --- Streaming loop ---
+            generated_chunks = []
+            stream = self._llm_engine.generate_response(
                 messages,
                 temperature=out_response.temperature,
                 max_tokens=out_response.max_output_tokens,
                 request_id=item_id,
-            ):
+            )
+
+            async for delta, finished in stream:
                 if self._cancel_response:
+                    # Early exit if cancelled
                     if self._cancel_repsonse_id and self._cancel_repsonse_id != response_id:
                         logger.info(f"Failed to cancel response: {self._cancel_repsonse_id}")
-                        self._cancel_response = False
-                        self._cancel_repsonse_id = None
                     else:
                         logger.info(f"Response generation cancelled: {response_id}")
                         out_response.status = "cancelled"
-                        await self.send_event(ResponseDone(
-                                type="response.done",
-                                response=out_response
-                            ))
-                        self._cancel_response = False
-                        self._cancel_repsonse_id = None
+                        await self.send_event(ResponseDone(type="response.done", response=out_response))
                         return
+                    self._cancel_response = False
+                    self._cancel_repsonse_id = None
 
-                generated_text += delta
-                await self.send_event(
-                    ResponseTextDelta(
+                if delta:
+                    generated_chunks.append(delta)
+                    await self.send_event(ResponseTextDelta(
                         delta=delta,
                         response_id=response_id,
                         item_id=item_id,
                         output_index=0,
                         content_index=0,
-                    )
-                )
-                await asyncio.sleep(0)
+                    ))
+                    
+                    await asyncio.sleep(0)
 
-            await self.send_event(
-                ResponseTextDone(
-                    type="response.text.done",
-                    text=generated_text,
-                    response_id=response_id,
-                    item_id=item_id,
-                    output_index=0, # same as the index of input[item] in ResponseDone
-                    content_index=0, # index of the content in the item as following ConversationItem
-                )
-            )
+            # Final text assembly
+            generated_text = ''.join(generated_chunks)
+            await self.send_event(ResponseTextDone(
+                type="response.text.done",
+                text=generated_text,
+                response_id=response_id,
+                item_id=item_id,
+                output_index=0,
+                content_index=0,
+            ))
 
             item = ConversationItem(
                 id=item_id,
                 type="message",
                 role="assistant",
-                content=[
-                    ItemContent(
-                        type="text",
-                        text=generated_text,
-                    )
-                ]
+                content=[ItemContent(type="text", text=generated_text)]
             )
+
             if not out_of_band:
                 self._messages.append(item)
-            
+
             out_response.output = [item]
             out_response.status = "completed"
             await self.send_event(ResponseDone(type="response.done", response=out_response))
+
         except asyncio.CancelledError:
-            logger.info("Response generation cancelled")
+            logger.info("Response generation cancelled (exception)")
             out_response.status = "cancelled"
-            await self.send_event(ResponseDone(
-                    type="response.done",
-                    response=out_response
-            ))
+            await self.send_event(ResponseDone(type="response.done", response=out_response))
+
         except Exception as e:
             import traceback
             logger.error(f"Error during response generation: {e}")
             traceback.print_exc()
             out_response.status = "failed"
-            await self.send_event(ResponseDone(
-                    type="response.done",
-                    response=out_response
-                ))
+            await self.send_event(ResponseDone(type="response.done", response=out_response))
 
     async def _generate_response(self):
         while True:
@@ -619,8 +604,8 @@ class RealtimeLLMSession:
                 logger.error(f"{self} exception generating response: {e.__class__.__name__} ({e})")
                 import traceback
                 traceback.print_exc()
-        logger.info(f"Generating task finished")
-
+        logger.info("Generating task finished")
+        
     async def _handle_response_cancel(self, event: ResponseCancelEvent):
         # Handle response cancel events
         logger.debug(f"Response cancel event: {event}")
@@ -646,28 +631,29 @@ class RealtimeLLMSession:
         Returns:
             List of dictionaries representing the formatted messages.
         """
+        last_index = len(conv_items) - 1
         messages = []
-        for item in conv_items:
+        for index, item in enumerate(conv_items):
             contents = []
             for part in item.content:
-                content = {
-                    "type": part.type
-                }
-                if part.type == "text" or part.type == "input_text":
-                    content["type"] = "text" 
-                    content["text"] = part.text
-                elif part.type == "input_audio":  #no audio which is for output, fillter it out
-                    if part.transcript:
-                        content["type"] = "text" 
-                        content["text"] = part.transcript
+                if part.type in {"text", "input_text"}:
+                    contents.append({
+                        "type": "text",
+                        "text": part.text
+                    })
+
+                elif part.type == "input_audio":
+                    if part.transcript and index != last_index:
+                        contents.append({
+                            "type": "text",
+                            "text": part.transcript
+                        })
                     else:
-                        content["type"] = "audio" 
-                        audio = base64.b64decode(part.audio)
-                        #convert to np.array
-                        audio_data = np.frombuffer(audio, dtype=np.int16)
-                        content["audio"] = audio_data
-            
-                contents.append(content)
+                        audio_data = np.frombuffer(base64.b64decode(part.audio), dtype=np.int16)
+                        contents.append({
+                            "type": "audio",
+                            "audio": audio_data
+                        })
 
             messages.append({
                 "role": item.role,
