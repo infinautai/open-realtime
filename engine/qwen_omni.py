@@ -184,7 +184,6 @@ class QwenOmniLLMEngine(LLMEngine):
 
         prompt = self._processor.apply_chat_template(
             messages,
-            tokenize=self._tokenizer,
             add_generation_prompt=True,
             add_vision_id=True,
         )

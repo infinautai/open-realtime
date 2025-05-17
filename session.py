@@ -34,7 +34,6 @@ from events import (
     InputAudioBufferCommitted,
     InputAudioBufferCleared,
     ConversationItemCreated,
-    ConversationItem,
     
     InputAudioBufferSpeechStarted,
     InputAudioBufferSpeechStopped,
