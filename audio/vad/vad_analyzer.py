@@ -25,6 +25,10 @@ class VADParams(BaseModel):
     start_secs: float = VAD_START_SECS
     stop_secs: float = VAD_STOP_SECS
     min_volume: float = VAD_MIN_VOLUME
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 
 class VADAnalyzer(ABC):

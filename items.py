@@ -1,7 +1,7 @@
 
 from typing import Literal, Optional, Union, List, Dict, Any
 from pydantic import BaseModel, Field
-from utils import generateId
+from utils.id_generator import generateId, RealtimeId
 #
 # context
 #
@@ -11,9 +11,13 @@ class ItemContent(BaseModel):
     text: Optional[str] = None
     audio: Optional[str] = None  # base64-encoded audio
     transcript: Optional[str] = None
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class ConversationItem(BaseModel):
-    id: str = Field(default_factory=lambda: generateId("item"))
+    id: Union[str, RealtimeId] = Field(default_factory=lambda: generateId("item"))
     object: Optional[Literal["realtime.item"]] = "realtime.item"
     type: Literal["message", "function_call", "function_call_output"]
     status: Optional[Literal["completed", "in_progress", "incomplete"]] = None
@@ -25,11 +29,19 @@ class ConversationItem(BaseModel):
     name: Optional[str] = None
     arguments: Optional[str] = None
     output: Optional[str] = None
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 
 class RealtimeConversation(BaseModel):
-    id: str
+    id: Union[str, RealtimeId] = Field(default_factory=lambda: generateId("event"))
     object: Literal["realtime.conversation"]
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class InboundResponseProperties(BaseModel):
     conversation: Optional[Literal["auto", "none"]] = "auto" # The auto value means that the contents of the response will be added to the default conversation. Set this to none to create an out-of-band response which will not add items to default conversation.
@@ -44,14 +56,21 @@ class InboundResponseProperties(BaseModel):
     temperature: Optional[float] = None
     max_response_output_tokens: Optional[Union[int, Literal["inf"]]] = None
     
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class StatusDetails(BaseModel):
     reason: str
     type: Optional[Literal["completed", "cancelled", "failed", "incomplete"]] = None
     error: Optional[Dict[str, Any]] = None
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class OutboundResponseProperties(BaseModel):
-    id: str = Field(default_factory=lambda: generateId("resp"))
+    id: Union[str, RealtimeId] = Field(default_factory=lambda: generateId("resp"))
     conversation_id: Optional[str]
     max_output_tokens: Optional[Union[int, Literal["inf"]]] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -64,4 +83,8 @@ class OutboundResponseProperties(BaseModel):
     temperature: Optional[float] = None
     usage: Optional[Dict[str, Any]] = None
     voice: Optional[str] = None
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
     

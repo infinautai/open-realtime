@@ -9,7 +9,7 @@ from items import (
     OutboundResponseProperties,
 )
 from loguru import logger
-from utils import generateId
+from utils.id_generator import generateId, RealtimeId
 #
 # session properties
 #
@@ -39,12 +39,20 @@ class InputAudioTranscription(BaseModel):
         #     raise ValueError(
         #         "Fields 'language' and 'prompt' are only supported when model is 'gpt-4o-transcribe'"
         #     )
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class TurnDetection(BaseModel):
     type: Optional[Literal["server_vad"]] = "server_vad"
     threshold: Optional[float] = 0.5
     prefix_padding_ms: Optional[int] = 200
     silence_duration_ms: Optional[int] = 600
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 # class SemanticTurnDetection(BaseModel):
 #     type: Optional[Literal["semantic_vad"]] = "semantic_vad"
@@ -55,7 +63,8 @@ class TurnDetection(BaseModel):
 class SessionProperties(BaseModel):
     modalities: Optional[List[Literal["text"]]] = None #only text is supported
     instructions: Optional[str] = None
-    # voice: Optional[str] = None  #don't support audio output for now
+    voice: Optional[str] = "alloy"  # TTS voice setting
+    tts_model: Optional[str] = "gpt-4o-mini-tts"  # TTS model setting
     input_audio_format: Optional[Literal["pcm16"]] = None # "g711_ulaw", "g711_alaw"
     output_audio_format: Optional[Literal["pcm16"]] = None # "g711_ulaw", "g711_alaw"
     input_audio_transcription: Optional[InputAudioTranscription] = None
@@ -67,6 +76,10 @@ class SessionProperties(BaseModel):
     tool_choice: Optional[Literal["auto", "none", "required"]] = None
     temperature: Optional[float] = None
     max_response_output_tokens: Optional[Union[int, Literal["inf"]]] = None
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 
 #
@@ -78,13 +91,21 @@ class RealtimeError(BaseModel):
     message: str
     param: Optional[str] = None
     event_id: Optional[str] = None
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 
 #
 # client events
 #
 class ClientEvent(BaseModel):
-    event_id: str = Field(default_factory=lambda: generateId("event"))
+    event_id: Union[str, RealtimeId] = Field(default_factory=lambda: generateId("event"))
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class SessionUpdateEvent(ClientEvent):
     type: Literal["session.update"] = "session.update"
@@ -119,18 +140,18 @@ class ConversationItemCreateEvent(ClientEvent):
 # Send this event to truncate a previous ASSISTANT message’s audio. 
 class ConversationItemTruncateEvent(ClientEvent):
     type: Literal["conversation.item.truncate"] = "conversation.item.truncate"
-    item_id: str
+    item_id: Union[str, RealtimeId]
     content_index: int
     audio_end_ms: int
 
 class ConversationItemDeleteEvent(ClientEvent):
     type: Literal["conversation.item.delete"] = "conversation.item.delete"
-    item_id: str
+    item_id: Union[str, RealtimeId]
 
 
 class ConversationItemRetrieveEvent(ClientEvent):
     type: Literal["conversation.item.retrieve"] = "conversation.item.retrieve"
-    item_id: str
+    item_id: Union[str, RealtimeId]
 
 
 class ResponseCreateEvent(ClientEvent):
@@ -140,7 +161,7 @@ class ResponseCreateEvent(ClientEvent):
 
 class ResponseCancelEvent(ClientEvent):
     type: Literal["response.cancel"] = "response.cancel"
-    response_id: Optional[str] = None
+    response_id: Optional[Union[str, RealtimeId]] = None
 
 #
 # server events
@@ -151,8 +172,9 @@ class ServerEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: generateId("event"))
     type: str
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 
 class SessionCreatedEvent(ServerEvent):
@@ -172,41 +194,41 @@ class ConversationCreated(ServerEvent):
 
 class ConversationItemCreated(ServerEvent):
     type: Literal["conversation.item.created"] = "conversation.item.created"
-    previous_item_id: Optional[str] = None
+    previous_item_id: Optional[Union[str, RealtimeId]] = None
     item: ConversationItem
 
 
 class ConversationItemInputAudioTranscriptionDelta(ServerEvent):
     type: Literal["conversation.item.input_audio_transcription.delta"] = "conversation.item.input_audio_transcription.delta"
-    item_id: str
+    item_id: Union[str, RealtimeId]
     content_index: int
     delta: str
 
 
 class ConversationItemInputAudioTranscriptionCompleted(ServerEvent):
     type: Literal["conversation.item.input_audio_transcription.completed"] = "conversation.item.input_audio_transcription.completed"
-    item_id: str
+    item_id: Union[str, RealtimeId]
     content_index: int
     transcript: str
 
 
 class ConversationItemInputAudioTranscriptionFailed(ServerEvent):
     type: Literal["conversation.item.input_audio_transcription.failed"] = "conversation.item.input_audio_transcription.failed"
-    item_id: str
+    item_id: Union[str, RealtimeId]
     content_index: int
     error: RealtimeError
 
 
 class ConversationItemTruncated(ServerEvent):
     type: Literal["conversation.item.truncated"] = "conversation.item.truncated"
-    item_id: str
+    item_id: Union[str, RealtimeId]
     content_index: int
     audio_end_ms: int
 
 
 class ConversationItemDeleted(ServerEvent):
     type: Literal["conversation.item.deleted"] = "conversation.item.deleted"
-    item_id: str
+    item_id: Union[str, RealtimeId]
 
 
 class ConversationItemRetrieved(ServerEvent):
@@ -226,22 +248,22 @@ class ResponseDone(ServerEvent):
 
 class ResponseOutputItemAdded(ServerEvent):
     type: Literal["response.output_item.added"] = "response.output_item.added"
-    response_id: str
+    response_id: Union[str, RealtimeId]
     output_index: int
     item: ConversationItem
 
 
 class ResponseOutputItemDone(ServerEvent):
     type: Literal["response.output_item.done"] = "response.output_item.done"
-    response_id: str
+    response_id: Union[str, RealtimeId]
     output_index: int
     item: ConversationItem
 
 
 # class ResponseContentPartAdded(ServerEvent):
 #     type: Literal["response.content_part.added"]
-#     response_id: str
-#     item_id: str
+#     response_id: Union[str, RealtimeId]
+#     item_id: Union[str, RealtimeId]
 #     output_index: int
 #     content_index: int
 #     part: ItemContent
@@ -249,8 +271,8 @@ class ResponseOutputItemDone(ServerEvent):
 
 # class ResponseContentPartDone(ServerEvent):
 #     type: Literal["response.content_part.done"]
-#     response_id: str
-#     item_id: str
+#     response_id: Union[str, RealtimeId]
+#     item_id: Union[str, RealtimeId]
 #     output_index: int
 #     content_index: int
 #     part: ItemContent
@@ -258,8 +280,8 @@ class ResponseOutputItemDone(ServerEvent):
 
 class ResponseTextDelta(ServerEvent):
     type: Literal["response.text.delta"] = "response.text.delta"
-    response_id: str
-    item_id: str
+    response_id: Union[str, RealtimeId]
+    item_id: Union[str, RealtimeId]
     output_index: int
     content_index: int
     delta: str
@@ -267,8 +289,8 @@ class ResponseTextDelta(ServerEvent):
 
 class ResponseTextDone(ServerEvent):
     type: Literal["response.text.done"] = "response.text.done"
-    response_id: str
-    item_id: str
+    response_id: Union[str, RealtimeId]
+    item_id: Union[str, RealtimeId]
     output_index: int
     content_index: int
     text: str
@@ -276,8 +298,8 @@ class ResponseTextDone(ServerEvent):
 
 class ResponseAudioTranscriptDelta(ServerEvent):
     type: Literal["response.audio_transcript.delta"] = "response.audio_transcript.delta"
-    response_id: str
-    item_id: str
+    response_id: Union[str, RealtimeId]
+    item_id: Union[str, RealtimeId]
     output_index: int
     content_index: int
     delta: str
@@ -285,8 +307,8 @@ class ResponseAudioTranscriptDelta(ServerEvent):
 
 class ResponseAudioTranscriptDone(ServerEvent):
     type: Literal["response.audio_transcript.done"] = "response.audio_transcript.done"
-    response_id: str
-    item_id: str
+    response_id: Union[str, RealtimeId]
+    item_id: Union[str, RealtimeId]
     output_index: int
     content_index: int
     transcript: str
@@ -294,8 +316,8 @@ class ResponseAudioTranscriptDone(ServerEvent):
 
 class ResponseAudioDelta(ServerEvent):
     type: Literal["response.audio.delta"] = "response.audio.delta"
-    response_id: str
-    item_id: str
+    response_id: Union[str, RealtimeId]
+    item_id: Union[str, RealtimeId]
     output_index: int
     content_index: int
     delta: str  # base64-encoded audio
@@ -303,40 +325,49 @@ class ResponseAudioDelta(ServerEvent):
 
 class ResponseAudioDone(ServerEvent):
     type: Literal["response.audio.done"] = "response.audio.done"
-    response_id: str
-    item_id: str
+    response_id: Union[str, RealtimeId]
+    item_id: Union[str, RealtimeId]
     output_index: int
     content_index: int
 
 
+class ResponseAudioCancel(ServerEvent):
+    type: Literal["response.audio.cancel"] = "response.audio.cancel"
+    response_id: Union[str, RealtimeId]
+    item_id: Optional[Union[str, RealtimeId]]= None
+    output_index: int = 0
+    content_index: int = 0
+    reason: Optional[str] = None
+
+
 class ResponseFunctionCallArgumentsDelta(ServerEvent):
     type: Literal["response.function_call_arguments.delta"] = "response.function_call_arguments.delta"
-    response_id: str
-    item_id: str
+    response_id: Union[str, RealtimeId]
+    item_id: Union[str, RealtimeId]
     output_index: int
-    call_id: str
+    call_id: Union[str, RealtimeId]
     delta: str
 
 
 class ResponseFunctionCallArgumentsDone(ServerEvent):
     type: Literal["response.function_call_arguments.done"] = "response.function_call_arguments.done"
-    response_id: str
-    item_id: str
+    response_id: Union[str, RealtimeId]
+    item_id: Union[str, RealtimeId]
     output_index: int
-    call_id: str
+    call_id: Union[str, RealtimeId]
     arguments: str
 
 
 class InputAudioBufferSpeechStarted(ServerEvent):
     type: Literal["input_audio_buffer.speech_started"] = "input_audio_buffer.speech_started"
     audio_start_ms: int
-    item_id: str
+    item_id: Union[str, RealtimeId]
 
 
 class InputAudioBufferSpeechStopped(ServerEvent):
     type: Literal["input_audio_buffer.speech_stopped"] = "input_audio_buffer.speech_stopped"
     audio_end_ms: int
-    item_id: str
+    item_id: Union[str, RealtimeId]
 
 
 class InputAudioBufferCommitted(ServerEvent):

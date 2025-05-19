@@ -26,6 +26,7 @@ from events import (
     ResponseDone,
     ResponseTextDelta,
     ResponseTextDone,
+    ResponseAudioCancel,
     ResponseCancelEvent,
     SessionProperties,
 
@@ -50,9 +51,13 @@ from llm_engine import LLMEngine
 from audio.vad.vad_analyzer import VADAnalyzer, VADParams, VADState
 from audio.vad.silero import SileroVADAnalyzer
 import numpy as np
-from utils import generateId
+from utils.id_generator import generateId, RealtimeId
 from stt_engine import STTEngine
+from tts_engine import TTSEngine
 from pprint import pprint
+from enum import Enum
+from dataclasses import dataclass
+from tts_processor import TTSProcessor, TTSAction, TTSInputEvent
 
 DEFAULT_SESSION_PROPERTIES = SessionProperties(
     modalities=["text"],
@@ -84,14 +89,19 @@ def get_sample_rate(format: str) -> int:
 
 class InputAudioBuffer(BaseModel): 
     buffer: bytes = Field(default_factory=lambda: b"")
-    item_id: str = Field(default_factory=lambda: generateId("item")) 
+    item_id: Union[str, RealtimeId] = Field(default_factory=lambda: generateId("item")) 
+    
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
+    
     def __len__(self):
         return len(self.buffer)
     def append(self, data: bytes):
         self.buffer += data
     
 class RealtimeLLMSession:
-    def __init__(self,  websocket: WebSocket, llm_engine: LLMEngine, stt_engine: STTEngine = None, settings: SessionProperties = DEFAULT_SESSION_PROPERTIES): 
+    def __init__(self, websocket: WebSocket, llm_engine: LLMEngine, stt_engine: STTEngine = None, tts_engine: TTSEngine = None, settings: SessionProperties = DEFAULT_SESSION_PROPERTIES):
         self._websocket: WebSocket = websocket
         self._llm_engine = llm_engine
         
@@ -100,9 +110,8 @@ class RealtimeLLMSession:
         self._processing_task = None
         self._generating_queue = None
         self._generating_task = None
-        self._cancel_response = False
         
-        self._cancel_repsonse_id = None
+        self._cancel_response_id = generateId("resp", 0)
         
         self._settings: SessionProperties = settings # type: SessionProperties
         self._monitor_websocket_task = None
@@ -110,7 +119,6 @@ class RealtimeLLMSession:
         self._messages: Optional[List[ConversationItem]] = []   #TODO: change the name
         self._input_audio_buffer: InputAudioBuffer = InputAudioBuffer()
         # self._output_audio_buffer = bytearray()
-
         
         self._default_conversation_id = generateId("conv")
         
@@ -118,7 +126,16 @@ class RealtimeLLMSession:
         self._current_vad_state = VADState.QUIET
         
         self._stt_engine = stt_engine
-        
+        self._tts_engine = tts_engine
+        self.tts_processor = None
+        if tts_engine:
+            # Initialize TTS processor with validated settings
+            self.tts_processor = TTSProcessor(
+                self, 
+                tts_engine, 
+                params=self._get_tts_settings(settings)
+            )
+
     async def start(self):
         await self._websocket.accept()
         logger.info(f"{self} WebSocket connection accepted")
@@ -145,7 +162,6 @@ class RealtimeLLMSession:
            ConversationCreated(
                 type="conversation.created",
                 conversation=RealtimeConversation(
-                    id=generateId("event"),
                     object="realtime.conversation",
                     conversation={
                         "id": self._default_conversation_id,
@@ -155,6 +171,9 @@ class RealtimeLLMSession:
            )
         )
 
+        if self.tts_processor:
+            await self.tts_processor.start()
+            
         return self._receive_task
         
     async def stop(self):
@@ -165,8 +184,9 @@ class RealtimeLLMSession:
             
         if self._receive_task:
             logger.info("Stopping session...")
-            self._cancel_response = True
-            self._cancel_repsonse_id = None
+            # Ensure any ongoing responses are cancelled
+            # We don't have a specific item_id for session stopping, but we still want to send the cancel event
+            await self._cancel_active_response(reason="session_stopping", item_id="session_stop")
             self._receive_task.cancel()
             self._generating_task.cancel()
             self._processing_task.cancel()
@@ -289,17 +309,37 @@ class RealtimeLLMSession:
             traceback.print_exc()
 
     async def _handle_session_update(self, event: SessionUpdateEvent):
-        # Handle session update events
+        """Handle session update events.
+        
+        Updates session settings and related components (VAD, TTS) with new configuration.
+        Handles any errors that occur during the update process.
+        """
         logger.debug(f"Session update event: {event}")
       
-        # self._settings = self._settings.model_copy(
-        #     update=event.session.model_dump()
-        # )
+        # Update session settings
         self._settings = SessionProperties(**event.session.model_dump())
                 
         # Update the VAD analyzer if needed
         self._update_vad_analyzer(turn_detection=self._settings.turn_detection)
     
+        # Update the TTS processor if needed
+        if self.tts_processor:
+            try:
+                # Get new TTS settings
+                tts_settings = self._get_tts_settings()
+                logger.debug(f"Updating TTS settings: {tts_settings}")
+                
+                # Update TTS processor params
+                await self.tts_processor.update_params(**tts_settings)
+                
+                logger.info("TTS settings updated successfully")
+            except ValueError as e:
+                logger.error(f"Invalid TTS settings: {e}")
+                # Could add error event sending here if needed
+            except Exception as e:
+                logger.error(f"Failed to update TTS settings: {str(e)}")
+                logger.exception(e)  # Log full traceback for debugging
+            
         await self.send_event(
             SessionUpdatedEvent(session=self._settings)
         )
@@ -332,8 +372,12 @@ class RealtimeLLMSession:
                             )
                         )
                         
-                        self._cancel_response = True
-                        self._cancel_repsonse_id = None
+                        # Cancel any ongoing response when user starts speaking
+                        # Pass the current input audio buffer item_id for reference
+                        await self._cancel_active_response(
+                            reason="user_started_speaking", 
+                            item_id=self._input_audio_buffer.item_id
+                        )
                         
                     elif new_vad_state == VADState.QUIET:
                         logger.debug(f"Speech stopped, time_offset: {time_offset}")
@@ -345,9 +389,6 @@ class RealtimeLLMSession:
                             )
                         )
                         
-                        self._cancel_response = False
-                        self._cancel_repsonse_id = None
-
                     self._current_vad_state = new_vad_state
                     
         if commit_buffer:
@@ -529,20 +570,44 @@ class RealtimeLLMSession:
             )
 
             async for delta, finished in stream:
-                if self._cancel_response:
-                    # Early exit if cancelled
-                    if self._cancel_repsonse_id and self._cancel_repsonse_id != response_id:
-                        logger.info(f"Failed to cancel response: {self._cancel_repsonse_id}")
-                    else:
-                        logger.info(f"Response generation cancelled: {response_id}")
-                        out_response.status = "cancelled"
-                        await self.send_event(ResponseDone(type="response.done", response=out_response))
-                        return
-                    self._cancel_response = False
-                    self._cancel_repsonse_id = None
+                # Early exit if cancelled
+                if self._cancel_response_id >= response_id:
+                    logger.info(f"Cancelling response generation: {response_id}")
+                    out_response.status = "cancelled"
+                    
+                    # Notify TTS system of cancellation if available
+                    if self.tts_processor:
+                        tts_event = TTSInputEvent(
+                            text="",
+                            audio=None,
+                            isDelta=False,
+                            response_id=response_id,
+                            item_id=item_id,
+                            action=TTSAction.CANCEL
+                        )
+                        await self.tts_processor.push_event(tts_event)
+                    
+                    # Send cancellation event and exit
+                    await self.send_event(ResponseDone(
+                        type="response.done", 
+                        response=out_response
+                    ))
+                    return  
 
                 if delta:
                     generated_chunks.append(delta)
+                   
+                    if self.tts_processor:
+                        tts_event = TTSInputEvent(
+                            text=delta,
+                            audio=None,
+                            isDelta=True,
+                            response_id=response_id,
+                            item_id=item_id,
+                            action=TTSAction.CREATE
+                        )
+                        await self.tts_processor.push_event(tts_event)
+                        
                     await self.send_event(ResponseTextDelta(
                         delta=delta,
                         response_id=response_id,
@@ -550,11 +615,20 @@ class RealtimeLLMSession:
                         output_index=0,
                         content_index=0,
                     ))
-                    
                     await asyncio.sleep(0)
 
             # Final text assembly
             generated_text = ''.join(generated_chunks)
+            if self.tts_processor:
+                tts_event = TTSInputEvent(
+                    text=generated_text,
+                    audio=None,
+                    isDelta=False,
+                    response_id=response_id,
+                    item_id=item_id,
+                    action=TTSAction.CREATE
+                )
+                await self.tts_processor.push_event(tts_event)
             await self.send_event(ResponseTextDone(
                 type="response.text.done",
                 text=generated_text,
@@ -605,12 +679,48 @@ class RealtimeLLMSession:
                 traceback.print_exc()
         logger.info("Generating task finished")
         
+    async def _cancel_active_response(self, response_id=None, reason="user_cancelled", item_id=None):
+        """Cancel the currently active response generation.
+        
+        Args:
+            response_id: Optional specific response ID to cancel. If None, cancels any active response.
+            reason: Reason for cancellation, used for logging.
+            item_id: Optional item ID associated with the response being cancelled.
+        
+        Returns:
+            bool: True if a response was actually cancelled, False otherwise.
+        """
+        # Set cancellation flags
+        self._cancel_response_id = generateId("resp") if response_id is None else response_id
+        
+        logger.info(f"Response cancellation requested: ID={response_id or 'any'}, reason={reason}")
+        
+        # Send a direct audio cancellation event to client to ensure any buffered audio is discarded
+        # This is sent immediately, even before the cancellation is processed in _do_generate
+        await self.send_event(
+            ResponseAudioCancel(
+                response_id=self._cancel_response_id,
+                item_id=item_id or "unknown",
+                output_index=0,
+                content_index=0,
+                reason=f"session_{reason}"
+            )
+        )
+        
+        # We can't immediately know if cancellation succeeded
+        # The actual cancellation happens in _do_generate
+        return True
+        
     async def _handle_response_cancel(self, event: ResponseCancelEvent):
         # Handle response cancel events
         logger.debug(f"Response cancel event: {event}")
-        self._cancel_response = True
-        self._cancel_repsonse_id = event.response_id
-        
+        # We don't have the item_id from the event, but we'll use the response_id as the item_id for tracking
+        # This should be sufficient as the client will match cancellations by response_id
+        await self._cancel_active_response(
+            response_id=event.response_id, 
+            reason="explicit_cancel_event",
+            item_id=event.response_id  # Using response_id as item_id for simplicity
+        )
 
     async def send_event(self, event: ClientEvent):
         data = event.model_dump_json(exclude_none=True)
@@ -660,4 +770,36 @@ class RealtimeLLMSession:
             })
     
         return messages
-
+    
+    def _get_tts_settings(self, settings: Optional[SessionProperties] = None) -> dict:
+        """Get TTS settings from session properties.
+        
+        Args:
+            settings: Optional session properties to use. If None, uses current settings.
+            
+        Returns:
+            Dictionary of TTS settings with validated values.
+        
+        Note:
+            - sample_rate is determined by output_audio_format
+            - voice defaults to "alloy" if not specified
+            - model defaults to "gpt-4o-mini-tts" if not specified
+            - instructions are optional and can be None
+        """
+        settings = settings or self._settings
+        
+        # Get output format with default value
+        output_format = settings.output_audio_format or "pcm16"
+        
+        # Build settings dict with validated values
+        tts_settings = {
+            "sample_rate": get_sample_rate(output_format),
+            "voice": settings.voice or "alloy",
+            "model": settings.tts_model or "gpt-4o-mini-tts"
+        }
+        
+        # Only include instructions if they exist
+        if settings.instructions:
+            tts_settings["instructions"] = settings.instructions
+            
+        return tts_settings

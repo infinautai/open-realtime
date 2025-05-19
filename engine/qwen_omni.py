@@ -38,8 +38,10 @@ class QwenOmniLLMEngine(LLMEngine):
             model=self._model_name,
             gpu_memory_utilization=0.9,
             max_model_len=8192,
+            limit_mm_per_prompt = self._limit_mm_per_prompt,
             trust_remote_code=True,
         )
+        
         self._engine = AsyncLLMEngine.from_engine_args(engine_args)
 
     def _initialize_tokenizer(self):

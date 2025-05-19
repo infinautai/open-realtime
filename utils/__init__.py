@@ -1,4 +1,4 @@
 
-from .id_generator import generateId
+from .id_generator import generateId, RealtimeId
 
-__all__ = ["generateId"]
+__all__ = ["generateId", "RealtimeId"]
