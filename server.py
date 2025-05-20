@@ -17,6 +17,8 @@ from stt.whisper import WhisperSTTEngineMLX as WhisperSTTEngine, MLXModel as Mod
 
 #tts
 from tts.openai_tts import OpenAITTSService
+from tts.elevenlabs_tts import ElevenLabsTTSService
+
 from session import RealtimeLLMSession
 
 load_dotenv()
@@ -45,6 +47,14 @@ async def lifespan(app: FastAPI):
         sample_rate=16000,
     )
     tts_engine.load()
+    
+    # tts_engine = ElevenLabsTTSService(
+    #     api_key=os.getenv("ELEVENLABS_API_KEY"),
+    #     voice="JBFqnCBsd6RMkjVDRZzb",
+    #     model="eleven_multilingual_v2",
+    #     sample_rate=16000,
+    # )
+    # tts_engine.load()
     app.state.tts_engine = tts_engine
     
     logger.info("All engines are ready.")

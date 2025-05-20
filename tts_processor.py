@@ -184,6 +184,7 @@ class TTSProcessor:
 
     async def _do_tts(self, event: TTSInputEvent):
         try:
+            first_time = True
             async for audio in self.tts_engine.run_tts(event.text, **self.params):
                 if not audio or len(audio) == 0:
                     continue
@@ -193,6 +194,9 @@ class TTSProcessor:
                     logger.info(f"Cancelling TTS synthesis for response: {event.response_id}, cancelled by: {self._cancel_response_id}")
                     return
                 
+                if first_time:
+                    first_time = False
+                    logger.info(f"First word of TTS synthesis...")
                 # Send audio delta
                 await self.session.send_event(
                     ResponseAudioDelta(

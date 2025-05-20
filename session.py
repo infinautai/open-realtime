@@ -392,7 +392,7 @@ class RealtimeLLMSession:
                     self._current_vad_state = new_vad_state
                     
         if commit_buffer:
-            buffer = self._input_audio_buffer.buffer #save for stt
+            audio_buffer = self._input_audio_buffer #save for stt
             conv_item = await self._handle_input_audio_buffer_commit(
                 InputAudioBufferCommitEvent(
                     type="input_audio_buffer.commit",
@@ -405,13 +405,13 @@ class RealtimeLLMSession:
             if self._stt_engine:
                 # Transcribe the audio buffer
                 transcript = ""
-                async for text, language in self._stt_engine.run_stt(buffer):
+                async for text, language in self._stt_engine.run_stt(audio_buffer.buffer):
                     if text:
                         print(f"Transcription: [{text}]")
                         transcript += text
                         await self.send_event(ConversationItemInputAudioTranscriptionCompleted(
                             transcript=text,
-                            item_id=self._input_audio_buffer.item_id,
+                            item_id=audio_buffer.item_id,
                             content_index=0
                         ))
                         await asyncio.sleep(0)
@@ -727,8 +727,7 @@ class RealtimeLLMSession:
         try:
             await self._websocket.send_text(data)
         except (RuntimeError, WebSocketDisconnect) as e:
-            logger.error(f"Exception sending data: {e.__class__.__name__} ({e})")
-            # Optionally set a flag here to prevent further sends
+            # logger.error(f"Exception sending data: {e.__class__.__name__} ({e})")
             pass
         
     def convert_to_listofdict(self, conv_items: list[ConversationItem])-> list[Dict[str, Union[str, List[Dict[str, str]]]]]:

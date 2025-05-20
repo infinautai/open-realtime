@@ -1,11 +1,11 @@
 from llm_engine import LLMEngine
 from typing import List, AsyncGenerator, Tuple, Dict, Union
 import time
-
+from loguru import logger
 import pprint
+import asyncio
 
-
-test_response1 = "从前有一位名叫李青的侠客，他行侠仗义，心怀正义。"
+test_response1 = "从前，有一位名叫李青的大侠。他行侠仗义，心怀正义。"
 test_response2 = """
 一天，李青得知一个邪恶的黑帮在江湖上作恶多端，他们横行乡里，欺压百姓。李青决定揭露黑帮的罪行，保护无辜百姓。
 他深入敌营，智斗黑帮的头目。在一场惊心动魄的对决中，李青运用了高超的武艺和智慧，终于将黑帮头目绳之以法。江湖因此恢复了平静，百姓们感激不尽，李青也因为他的英勇和正义，成为了后人传颂的侠义典范
@@ -35,13 +35,14 @@ class MockLLMEngine(LLMEngine):
         # yield (f"en...", False)
         # for i in range(50):
         #     yield ("....", False)
-        #     time.sleep(0.1)
+        #     await asyncio.sleep(0.1)
             
         # yield ("", True)
         
+        logger.info(f"Generating response for request_id: {request_id}")
         yield (test_response1, False)
         # response 2 words in a time
         for i in range(0, len(test_response2), 2):
             yield (test_response2[i:i+2], False)
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
         yield ("", True)
