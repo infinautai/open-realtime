@@ -4,7 +4,7 @@ A WebSocket-based real-time voice conversation system that supports voice input,
 
 ## 🎯 Project Background
 
-In the past half year, omni-modal models and speech-to-speech models such as Qwen Omni, Ming-Omni, and Qwen Audio have been released one after another, highlighting that omni-modal models are currently a major focus in AI research. However, there is still a lack of open-source tools for real-time API interaction.
+In the past half year, omni-modal models and speech-to-speech models such as Qwen Omni, Ming-Omni, Qwen Audio and Kimi Audio have been released one after another, highlighting that omni-modal models are currently a major focus in AI research. However, there is still a lack of open-source tools for real-time API interaction.
 
 This project is inspired by the OpenAI realtime API and playground, and aims to provide an open-source version of a realtime playground. We hope this tool can help accelerate the adoption and development of these advanced models in the community.
 
