@@ -9,11 +9,11 @@ from contextlib import asynccontextmanager
 from loguru import logger
 from dotenv import load_dotenv
 
-# from engine.qwen_omni import QwenOmniLLMEngine
-# from stt.whisper import WhisperSTTEngine, Model
+from engine.qwen_omni import QwenOmniLLMEngine
+from stt.whisper import WhisperSTTEngine, Model
 
-from engine.mock_engine import MockLLMEngine as QwenOmniLLMEngine
-from stt.whisper import WhisperSTTEngineMLX as WhisperSTTEngine, MLXModel as Model
+# from engine.mock_engine import MockLLMEngine as QwenOmniLLMEngine
+# from stt.whisper import WhisperSTTEngineMLX as WhisperSTTEngine, MLXModel as Model
 
 #tts
 from tts.openai_tts import OpenAITTSService
